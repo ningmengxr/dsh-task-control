@@ -1,0 +1,4 @@
+# 本地开发覆盖层：直接加载 src/index.ts（Node 22.6+ 类型剥离，无需构建）
+- insert:
+    - id: task-control
+      name: 'E:/deepseek/进程存活监测/src/index.ts'
