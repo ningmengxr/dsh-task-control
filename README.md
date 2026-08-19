@@ -33,6 +33,11 @@ DeepSeek Harness 插件：在输入框区域提供「检测」与「追加条件
 3. 重启 DSH web，硬刷新（Ctrl+Shift+R）页面。
 
 > 宿主半挂载 `/dsh-task-control/resume` 路由（loopback Host 校验），浏览器端同源 fetch 调用；客户端 bundle 按 `window.__ModuleLoader__` 契约加载。
+## 安装
+
+通过 npm 安装：
+```bash
+npm install dsh-task-control
 
 ## 自定义文案
 
