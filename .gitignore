@@ -1,0 +1,11 @@
+# 依赖与构建产物以外的杂项
+node_modules/
+
+# 日志与临时文件
+*.log
+.boot-test-*.log
+.inspect-*
+
+# 系统文件
+.DS_Store
+Thumbs.db
