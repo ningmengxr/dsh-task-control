@@ -4,6 +4,8 @@
 
 /** 所有可自定义的文案（追加条件相关文本已定稿为硬编码，不可自定义）。 */
 export interface TaskControlSettings {
+  /** 急停按钮文案 */
+  emergencyLabel: string
   /** 检测按钮文案 */
   checkLabel: string
   /** 追加条件按钮文案 */
@@ -18,6 +20,7 @@ export interface TaskControlSettings {
 
 /** 默认文案。 */
 export const SETTINGS_DEFAULTS: TaskControlSettings = {
+  emergencyLabel: '急停',
   checkLabel: '拍一下deepseek',
   appendLabel: '追加条件',
   healthyText: '任务正常，无异常',

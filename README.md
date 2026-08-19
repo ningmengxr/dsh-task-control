@@ -34,10 +34,6 @@ DeepSeek Harness 插件：在输入框区域提供「检测」与「追加条件
 
 > 宿主半挂载 `/dsh-task-control/resume` 路由（loopback Host 校验），浏览器端同源 fetch 调用；客户端 bundle 按 `window.__ModuleLoader__` 契约加载。
 
-通过 npm 安装：
-```bash
-npm install dsh-task-control
-
 ## 自定义文案
 
 设置 → 插件 → **任务控制** 卡片：
@@ -73,9 +69,6 @@ node build.mjs
 ├── DESIGN.md                 # 设计文档
 └── 功能验证测试清单.txt        # 打断测试 / 功能验证清单
 ```
----
-
-⭐ 如果这个插件帮到了你，请给我们留下一个 Star！这对开发者是莫大的鼓励和支持。谢谢！❤️
 
 ## License
 

@@ -128,3 +128,13 @@ composerPhase: ComposerPhase        // 输入栏状态（send/stop 切换）
 3. 关闭/留空 → `resumeTask("继续")` → 同上，隐形恢复原任务
 
 **文案定稿（2026-08-18）**：傻瓜提示（"打开此窗口时程序会暂停"）/ 追加模板（"补充条件：{条件}，请据此重新执行刚才的任务"）/ 继续模板（"继续"）**硬编码**，从设置卡移除——设置只保留检测按钮文案、追加条件按钮文案、检测·无异常/出错/运行中输出 5 项。
+
+**卡死识别 + 强制终止（2026-08-18）**：
+- **识别**：检测按钮读 `ConversationSnapshot.runningCalls`（所有"已发起未返回"的工具调用，含 `name` + `time` 发起时间戳）；任一调用超 10 分钟未返回 → 提示"疑似卡死：工具X已运行N分N秒"。
+- **终止难题**：agent 卡在未返回的工具调用时，`session.cancel`（原生停止 / 追加条件暂停）会被排在工具返回值后面，无法立即生效。
+- **解法**：检测弹窗在卡死时显示【强制终止】按钮 → 客户端从 `runningCalls.argsRaw` 提取命令特征（URL / 文件名 / 引号内路径）→ POST `/dsh-task-control/kill` → 宿主用 PowerShell `Get-CimInstance` 按命令行匹配进程并 `Stop-Process -Force` → 工具调用立即返回（tool/result ok=false）→ turn 结束 → 任务真正停止。
+- 宿主 kill 细节：绝对路径 powershell.exe（PATH 可能不含 System32）；marker 清洗 `'"\`` 防注入；`$PID` 排除自身。
+
+**下载中检测（2026-08-18）**：下载/安装类调用（curl/wget/iwr/-o/OutFile/pip install）**无论是否超时**都查宿主 `/dsh-task-control/download-status`（进程活跃 + 输出文件大小 + URL HEAD Content-Length 算百分比）：活跃 → "正在下载 xxx，进度 xx%"（无输出文件/查询失败 → "无法计算进度但仍在下载"）；已退出 → "下载出现异常中断" + 强制终止。
+
+**急停按钮（2026-08-18）**：红色底白字胶囊（`--dsw-alias-state-error-primary` + `#fff`），位于拍一下左侧（order 80）；一键收集所有未返回工具调用的 marker → 逐个 kill → cancelSession，让用户在下载/安装进行中（不报错不超时）也能随时停掉任务更换方案；文案可自定义（设置卡 6 项）。

@@ -10,6 +10,7 @@ import { loadSettings, saveSettings, type TaskControlSettings } from './settings
 type CardProps = PropsRuntime<'settings.plugin.item'>
 
 const FIELDS: Array<[keyof TaskControlSettings, string]> = [
+  ['emergencyLabel', '急停按钮文案'],
   ['checkLabel', '检测按钮文案'],
   ['appendLabel', '追加条件按钮文案'],
   ['healthyText', '检测·无异常输出'],

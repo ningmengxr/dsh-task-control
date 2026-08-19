@@ -13,7 +13,7 @@ import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
 // SlotMap 合并
 import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type {} from '@deepseek-ai/dsh-client-ui-settings-plugins/client'
-import { CheckButton, AppendButton, type AppendInjected } from './buttons.tsx'
+import { CheckButton, AppendButton, EmergencyButton, type AppendInjected, type CheckInjected } from './buttons.tsx'
 import { SettingsCard } from './SettingsCard.tsx'
 
 export const name = 'task-control'
@@ -21,11 +21,30 @@ export const inject = ['slots', 'sessions']
 
 /** 客户端插件入口：注册按钮与设置卡。 */
 export function apply(ctx: ClientContext): void {
+  // 急停按钮：最左（order 80），红色，一键杀进程 + 终止任务
+  ctx.slots.inject('conversation.input.right', () => ctx.slots.register({
+    name: 'conversation.input.right',
+    id: 'task-emergency',
+    order: 80,
+    inject: (sessionId: string): CheckInjected => ({
+      cancelSession: () => {
+        // 立即中止当前会话的运行轮次（等同内置"停止"按钮）
+        void ctx.sessions.binding(sessionId)?.session?.cancel()
+      },
+    }),
+  }, EmergencyButton))
+
   // 检测按钮：与追加条件并排于工具行右端（order 90 < 100 → 在追加条件左侧）
   ctx.slots.inject('conversation.input.right', () => ctx.slots.register({
     name: 'conversation.input.right',
     id: 'task-check',
     order: 90,
+    inject: (sessionId: string): CheckInjected => ({
+      cancelSession: () => {
+        // 立即中止当前会话的运行轮次（等同内置"停止"按钮）
+        void ctx.sessions.binding(sessionId)?.session?.cancel()
+      },
+    }),
   }, CheckButton))
 
   ctx.slots.inject('conversation.input.right', () => ctx.slots.register({
