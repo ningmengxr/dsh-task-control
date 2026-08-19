@@ -1,7 +1,7 @@
 {
   "name": "dsh-task-control",
-  "version": "0.1.0",
-  "description": "任务控制插件：检测运行中任务是否出错（一键检查），以及向运行中的任务追加条件（中止后带条件重发）。Task control for DeepSeek Harness: one-click task health check + append-condition-to-running-task.",
+  "version": "0.2.0",
+  "description": "DeepSeek Harness 插件：pip/GitHub 下载卡死一键急停 + 下载进度检测 + 卡死识别 + 隐形追加条件。Emergency stop for stuck downloads, download progress, stuck detection and invisible append-condition for DSH.",
   "type": "module",
   "main": "lib/index.js",
   "types": "lib/types/index.d.ts",
@@ -16,6 +16,10 @@
     },
     "./package.json": "./package.json"
   },
+  "files": [
+    "lib",
+    "README.md"
+  ],
   "dsh": {
     "client": {
       "inject": [
@@ -29,13 +33,8 @@
     }
   },
   "scripts": {
-    "build": "node build.mjs"
+    "build": "node build.mjs",
+    "prepublishOnly": "node build.mjs"
   },
-  "license": "MIT",
-  "peerDependencies": {
-    "@deepseek-ai/cordis": "^4.0.1",
-    "@deepseek-ai/dsh-client-runtime": "^0.1.0-rc.5",
-    "@deepseek-ai/dsh-client-ui-primitives": "^0.1.0-rc.5",
-    "@deepseek-ai/dsh-client-ui-slots": "^0.1.0-rc.5"
-  }
+  "license": "MIT"
 }
