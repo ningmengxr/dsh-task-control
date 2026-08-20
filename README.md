@@ -84,6 +84,11 @@ node build.mjs
 └── 功能验证测试清单.txt        # 打断测试 / 功能验证清单
 ```
 
+## References / 相关资源
+
+- **官方反馈帖**（问题缘起）：[task stuck in download/install cannot be stopped — session.cancel queued behind tool return value](https://github.com/deepseek-ai/deepseek-harness/discussions/3400)（GitHub Discussions #3400，含官方开发者对 `session.cancel` 语义与跨重启恢复机制的分析）
+- **DSH Harness Handbook**（社区资深成员维护）：[Stop a DeepSeek Harness tool that will not cancel](https://sandbaseai.github.io/deepseek-harness-handbook/stuck-tool-cancellation.html) —— 基于上述反馈整理的手册专题：cancel accepted ≠ tool stopped，含证据时间线、实时遏制流程、重启语义与十二个修复门
+
 ## License
 
 MIT
