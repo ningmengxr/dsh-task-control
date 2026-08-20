@@ -121,7 +121,11 @@ export function CheckButton({ useSession, sessionId, cancelSession }: CheckButto
   const s = useSettings()
   const running = useSession(s => s.running)
   const lastError = useSession(s => s.lastAgentError)
-  const runningCalls = useSession(s => s.runningCalls)
+  const runningCalls = useSession(
+    s => s.runningCalls,
+    // 内容级比较：避免每次快照（新数组引用）都触发重渲染
+    (a, b) => a.length === b.length && a.every((x, i) => x === b[i]),
+  )
   const [open, setOpen] = useState(false)
   const [result, setResult] = useState('')
   const [stuckMarker, setStuckMarker] = useState<string | null>(null)
@@ -234,10 +238,11 @@ export function CheckButton({ useSession, sessionId, cancelSession }: CheckButto
   )
 }
 
-/** 追加条件相关的三个文本（定稿硬编码，不进设置）。 */
-const PAUSE_HINT = '打开此窗口时程序会暂停'
+/** 追加条件相关的文本（定稿硬编码，不进设置）。 */
+const PAUSE_HINT = '选择操作：仅暂停任务，或输入条件后带条件重跑'
 const APPEND_TEMPLATE = '补充条件：{条件}，请据此重新执行刚才的任务'
-const RESUME_TEXT = '继续'
+/** 结构化恢复指令：明确"恢复原任务"，不让模型自由发挥（对应"恢复决策硬门"方向）。 */
+const RESUME_TEXT = '任务已恢复，请继续执行原任务，不要重新开始'
 /** 任务未运行时点击追加条件的提示。 */
 const NO_TASK_NOTICE = '当前没有正在运行的任务'
 
@@ -285,31 +290,110 @@ function EmergencyConfirmModal({ onCancel, onConfirm, busy }: EmergencyConfirmMo
 }
 
 /**
+ * 急停结果弹窗：三态反馈 + 恢复决策点。
+ * - stopping：cancel 已送达（accepted），等待工具协作退出；
+ * - done：任务真正停止；
+ * - decision：被中断工具结果未知（TOOL_OUTCOME_UNKNOWN 插件层等价物）→ 显式选择恢复方式。
+ */
+interface EmergencyResultModalProps {
+  phase: 'stopping' | 'done' | 'decision'
+  result: string
+  interrupted: { callId: string; name: string }[]
+  onClose: () => void
+  onDecide: (choice: 'verify' | 'rerun' | 'skip') => void
+}
+function EmergencyResultModal({ phase, result, interrupted, onClose, onDecide }: EmergencyResultModalProps) {
+  return (
+    <ModalShell onClose={onClose}>
+      <div style={{ fontSize: 14, lineHeight: 1.5, whiteSpace: 'pre-wrap', marginBottom: 14 }}>
+        {result}
+      </div>
+      {phase === 'decision' && interrupted.length > 0 && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 14 }}>
+          <div style={{ fontSize: 12, opacity: 0.75 }}>恢复前请先决定如何处理被中断的工具：</div>
+          <button type="button" onClick={() => onDecide('verify')} style={{ textAlign: 'left' }}>
+            ① 验证外部状态（检查文件/进程/日志，确认是否有副作用）
+          </button>
+          <button type="button" onClick={() => onDecide('rerun')} style={{ textAlign: 'left' }}>
+            ② 重新执行该工具
+          </button>
+          <button type="button" onClick={() => onDecide('skip')} style={{ textAlign: 'left' }}>
+            ③ 跳过，从当前状态继续
+          </button>
+        </div>
+      )}
+      <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+        {phase === 'stopping' && (
+          <button type="button" onClick={onClose}>后台等待</button>
+        )}
+        {phase !== 'stopping' && (
+          <button type="button" onClick={onClose}>确定</button>
+        )}
+      </div>
+    </ModalShell>
+  )
+}
+
+/**
  * 急停按钮（input.right，拍一下左侧）：一键强制终止当前任务。
  * 场景：下载/安装进行中（不报错、未超时）时，「拍一下」不会弹强制终止，
  * 而 session.cancel（原生停止/追加条件）会被排在未返回的工具调用后面无响应——
  * 急停直接按命令特征杀进程 + cancel，让用户随时能停掉任务更换方案。
  * 防误触：点击先弹警告（勾选"了解丢失进度"后才能点确认）。
+ * 三态反馈：accepted（已发送停止指令）→ stopping（等待工具退出）→ idle（真正停止）；
+ * 被中断工具结果未知时弹出恢复决策点（验证外部状态 / 重跑 / 跳过），隐形注入恢复。
  */
-type EmergencyButtonProps = PropsRuntime<'conversation.input.right'> & CheckInjected
-export function EmergencyButton({ useSession, cancelSession }: EmergencyButtonProps) {
+type EmergencyButtonProps = PropsRuntime<'conversation.input.right'> & AppendInjected
+export function EmergencyButton({ useSession, cancelSession, resumeTask }: EmergencyButtonProps) {
   const s = useSettings()
   const running = useSession(snapshot => snapshot.running)
-  const runningCalls = useSession(snapshot => snapshot.runningCalls)
+  const runningCalls = useSession(
+    snapshot => snapshot.runningCalls,
+    // 内容级比较：runningCalls 每次快照都是新数组引用，但内容未变时不触发重渲染
+    (a, b) => a.length === b.length && a.every((x, i) => x === b[i]),
+  )
+  // nodes 是大数组且每次快照都是新引用：eq 恒 true 避免每次快照都触发重渲染（卡顿元凶），
+  // 组件因 running 变化重渲染时仍会重新求值拿到最新 nodes（useSyncExternalStoreWithSelector 语义）
+  const nodes = useSession(snapshot => snapshot.nodes, () => true)
   const [confirmOpen, setConfirmOpen] = useState(false)
   const [open, setOpen] = useState(false)
+  const [phase, setPhase] = useState<'stopping' | 'done' | 'decision'>('done')
   const [result, setResult] = useState('')
+  const [interrupted, setInterrupted] = useState<{ callId: string; name: string }[]>([])
   const [busy, setBusy] = useState(false)
 
   /** 点击急停：空闲直接提示；运行中先弹确认警告。 */
   const onTap = (): void => {
     if (!running) {
       setResult(NO_TASK_NOTICE)
+      setPhase('done')
       setOpen(true)
       return
     }
     setConfirmOpen(true)
   }
+
+  /** stopping 态观察：running true→false = 真正停止，检查被中断工具结果。 */
+  useEffect(() => {
+    if (phase !== 'stopping') return
+    if (running) return
+    // 任务已停止：查快照中每个被中断工具是否有成功 tool-result
+    const unknown = interrupted.filter(t => {
+      const settled = nodes.some(n =>
+        (n as { kind?: string }).kind === 'tool-result'
+        && (n as { callId?: string }).callId === t.callId
+        && (n as { isError?: boolean }).isError === false)
+      return !settled
+    })
+    if (unknown.length > 0) {
+      setInterrupted(unknown)
+      setPhase('decision')
+      setResult(`任务已停止，但被中断的工具（${unknown.map(t => t.name).join('、')}）结果未知——可能未完成或产生了副作用（TOOL_OUTCOME_UNKNOWN）`)
+    } else {
+      setPhase('done')
+      setResult('任务已停止，被中断的工具已确认完成，可直接继续')
+    }
+  }, [running, phase]) // eslint-disable-line react-hooks/exhaustive-deps
 
   /** 勾选确认后执行急停：收集所有未返回工具调用的命令特征，逐个杀进程 + cancel。 */
   const doEmergency = async (): Promise<void> => {
@@ -317,6 +401,9 @@ export function EmergencyButton({ useSession, cancelSession }: EmergencyButtonPr
     setConfirmOpen(false)
     setBusy(true)
     try {
+      // 记录被中断的工具（callId + 名称），供恢复决策使用
+      const inter = runningCalls.map(call => ({ callId: call.callId, name: call.name }))
+      setInterrupted(inter)
       const markers = [...new Set(
         runningCalls
           .map(call => extractMarker(call.argsRaw))
@@ -338,16 +425,34 @@ export function EmergencyButton({ useSession, cancelSession }: EmergencyButtonPr
       }
       // 杀进程后 cancel，任务立即停止（而非排到工具返回值后面）
       cancelSession()
+      // 进入 stopping 态：cancel 已送达（accepted），等待工具真正退出（idle）
       setResult(killed > 0
-        ? `已急停：强制终止了 ${killed} 个进程，任务已停止`
+        ? '已发送停止指令，正在等待工具协作退出…（accepted → stopping）'
         : markers.length > 0
-          ? '已发送急停指令（未匹配到可终止的进程，可能已自行结束）'
-          : '已发送急停指令（任务没有可识别的进程，若仍卡住可稍后重试）')
+          ? '已发送停止指令，正在等待工具协作退出…（未匹配到可终止的进程）'
+          : '已发送停止指令，正在等待任务停止…')
+      setPhase(inter.length > 0 || killed > 0 ? 'stopping' : 'done')
       setOpen(true)
     } finally {
       setBusy(false)
     }
   }
+
+  /** 恢复决策：按用户选择隐形注入恢复指令。 */
+  const decideResume = (choice: 'verify' | 'rerun' | 'skip'): void => {
+    setOpen(false)
+    const names = interrupted.map(t => t.name).join('、')
+    let text: string
+    if (choice === 'verify') {
+      text = `被急停中断的工具（${names}）结果未知，请先验证外部状态（检查文件/进程/日志确认是否有副作用），确认后再决定继续或修复，不要盲目重试`
+    } else if (choice === 'rerun') {
+      text = `请重新执行被急停中断的工具（${names}，上次结果未知）`
+    } else {
+      text = `请跳过被急停中断的工具（${names}），从当前状态继续原任务`
+    }
+    setTimeout(() => resumeTask(text), 400)
+  }
+
   return (
     <>
       <TaskButton label={s.emergencyLabel} variant="danger" onClick={onTap} />
@@ -360,13 +465,12 @@ export function EmergencyButton({ useSession, cancelSession }: EmergencyButtonPr
         document.body,
       )}
       {open && createPortal(
-        <CheckModal
+        <EmergencyResultModal
+          phase={phase}
           result={result}
+          interrupted={interrupted}
           onClose={() => setOpen(false)}
-          stuckMarker={null}
-          killing={false}
-          killMessage=""
-          onForceKill={() => {}}
+          onDecide={decideResume}
         />,
         document.body,
       )}
@@ -484,13 +588,14 @@ function TaskButton({ label, onClick, variant }: { label: string; onClick: () =>
   )
 }
 
-/** 追加条件弹窗：不阻塞（程序可继续处理暂停指令）。 */
+/** 追加/暂停弹窗：单视图，固定提示"程序已暂停"。 */
 interface AppendModalProps {
   hint: string
   onSubmit: (condition: string) => void
   onCancel: () => void
+  onKeepPaused: () => void
 }
-function AppendModal({ hint, onSubmit, onCancel }: AppendModalProps) {
+function AppendModal({ hint, onSubmit, onCancel, onKeepPaused }: AppendModalProps) {
   const [value, setValue] = useState('')
   const commit = (): void => onSubmit(value.trim())
   const handleKey = (e: React.KeyboardEvent<HTMLInputElement>): void => {
@@ -499,13 +604,16 @@ function AppendModal({ hint, onSubmit, onCancel }: AppendModalProps) {
   }
   return (
     <ModalShell onClose={onCancel}>
-      <div style={{ fontSize: 13, opacity: 0.85, marginBottom: 10 }}>{hint}</div>
+      <div style={{ fontSize: 13, opacity: 0.85, marginBottom: 6 }}>{hint}</div>
+      <div style={{ fontSize: 14, marginBottom: 10, color: 'var(--dsw-alias-state-warn-primary)' }}>
+        程序已暂停
+      </div>
       <input
         autoFocus
         value={value}
         onChange={(e) => setValue(e.target.value)}
         onKeyDown={handleKey}
-        placeholder="补充条件（留空或按 Esc = 继续原任务）"
+        placeholder="补充条件（留空 = 恢复原任务）"
         style={{
           width: '100%', boxSizing: 'border-box', padding: '6px 8px',
           borderRadius: 6,
@@ -514,21 +622,40 @@ function AppendModal({ hint, onSubmit, onCancel }: AppendModalProps) {
           color: 'var(--dsw-alias-label-primary)',
         }}
       />
-      <div style={{ display: 'flex', gap: 8, marginTop: 12, justifyContent: 'flex-end' }}>
-        <button type="button" onClick={onCancel}>取消（继续原任务）</button>
-        <button type="button" onClick={commit}>确定</button>
+      <div style={{ display: 'flex', gap: 8, marginTop: 12, justifyContent: 'space-between', alignItems: 'center' }}>
+        <button
+          type="button"
+          onClick={onKeepPaused}
+          style={{
+            border: '1px solid var(--dsw-alias-state-warn-primary)',
+            borderRadius: 999,
+            padding: '4px 12px',
+            background: 'transparent',
+            color: 'var(--dsw-alias-state-warn-primary)',
+            cursor: 'pointer',
+            fontFamily: 'inherit',
+            fontSize: 13,
+            lineHeight: '20px',
+          }}
+        >
+          保持暂停
+        </button>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button type="button" onClick={onCancel}>继续</button>
+          <button type="button" onClick={commit}>确定</button>
+        </div>
       </div>
     </ModalShell>
   )
 }
 
-/** 追加条件按钮的注入面：宿主注入的中止与"隐形恢复"能力。 */
+/** 追加/暂停按钮的注入面：宿主注入的中止与"隐形恢复"能力。 */
 export interface AppendInjected {
   cancelSession: () => void
   resumeTask: (text: string) => void
 }
 
-/** 追加条件按钮（input.right）。 */
+/** 追加/暂停按钮（input.right）。 */
 type AppendButtonProps = PropsRuntime<'conversation.input.right'> & AppendInjected
 export function AppendButton({ resumeTask, cancelSession, useSession }: AppendButtonProps) {
   const s = useSettings()
@@ -539,25 +666,29 @@ export function AppendButton({ resumeTask, cancelSession, useSession }: AppendBu
 
   const onOpen = (): void => {
     if (!running) {
-      // 任务未运行：不取消、不弹输入窗——否则关闭时发出的"继续"
-      // 会被空闲的 AI 当成一个问题来"分析继续是什么意思"。
+      // 任务未运行：不弹输入窗（避免把"继续"发给空闲的 AI）
       setNotice(true)
       return
     }
-    // 点击立即暂停（真正的 stop：session.cancel），不等输入
+    // 点击立即暂停（客户端 RPC cancel，可靠，不依赖宿主路由）
     cancelSession()
     setResetKey((k) => k + 1)
     setOpen(true)
+  }
+  const onKeepPaused = (): void => {
+    // 保持暂停：关闭弹窗，不恢复（任务保持暂停状态）
+    setOpen(false)
   }
   const onSubmit = (condition: string): void => {
     setOpen(false)
     const text = condition !== ''
       ? renderTemplate(APPEND_TEMPLATE, { 条件: condition })
       : RESUME_TEXT
-    // 方案 B：走宿主通道，以插件来源消息隐形恢复（聊天只出现低调上下文行）
+    // 结构化恢复：带条件重跑或恢复原任务
     setTimeout(() => resumeTask(text), 400)
   }
   const onCancel = (): void => {
+    // 关闭弹窗 = 恢复原任务
     setOpen(false)
     setTimeout(() => resumeTask(RESUME_TEXT), 400)
   }
@@ -565,7 +696,13 @@ export function AppendButton({ resumeTask, cancelSession, useSession }: AppendBu
     <>
       <TaskButton label={s.appendLabel} onClick={onOpen} />
       {open && createPortal(
-        <AppendModal key={resetKey} hint={PAUSE_HINT} onSubmit={onSubmit} onCancel={onCancel} />,
+        <AppendModal
+          key={resetKey}
+          hint={PAUSE_HINT}
+          onSubmit={onSubmit}
+          onCancel={onCancel}
+          onKeepPaused={onKeepPaused}
+        />,
         document.body,
       )}
       {notice && createPortal(

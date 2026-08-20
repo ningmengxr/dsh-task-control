@@ -26,10 +26,24 @@ export function apply(ctx: ClientContext): void {
     name: 'conversation.input.right',
     id: 'task-emergency',
     order: 80,
-    inject: (sessionId: string): CheckInjected => ({
+    inject: (sessionId: string): AppendInjected => ({
       cancelSession: () => {
         // 立即中止当前会话的运行轮次（等同内置"停止"按钮）
         void ctx.sessions.binding(sessionId)?.session?.cancel()
+      },
+      resumeTask: async (text: string) => {
+        // 急停恢复：走宿主通道，以插件来源消息隐形恢复（与追加条件同通道）
+        try {
+          const response = await fetch('/dsh-task-control/resume', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ sessionId, text }),
+          })
+          if (!response.ok) throw new Error(`host channel http ${response.status}`)
+        } catch (error) {
+          console.warn('[dsh-task-control] 宿主通道不可用，退回可见消息:', error)
+          void ctx.sessions.binding(sessionId)?.session?.prompt([{ type: 'text', text }], 'queue')
+        }
       },
     }),
   }, EmergencyButton))

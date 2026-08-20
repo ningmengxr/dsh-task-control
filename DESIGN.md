@@ -138,3 +138,13 @@ composerPhase: ComposerPhase        // 输入栏状态（send/stop 切换）
 **下载中检测（2026-08-18）**：下载/安装类调用（curl/wget/iwr/-o/OutFile/pip install）**无论是否超时**都查宿主 `/dsh-task-control/download-status`（进程活跃 + 输出文件大小 + URL HEAD Content-Length 算百分比）：活跃 → "正在下载 xxx，进度 xx%"（无输出文件/查询失败 → "无法计算进度但仍在下载"）；已退出 → "下载出现异常中断" + 强制终止。
 
 **急停按钮（2026-08-18）**：红色底白字胶囊（`--dsw-alias-state-error-primary` + `#fff`），位于拍一下左侧（order 80）；一键收集所有未返回工具调用的 marker → 逐个 kill → cancelSession，让用户在下载/安装进行中（不报错不超时）也能随时停掉任务更换方案；文案可自定义（设置卡 6 项）。
+
+**追加/暂停方案（2026-08-20 拟定，待下午实现）**：
+- **动机**：输入栏已拥挤，不加新按钮——把「追加条件」按钮文案改为「追加/暂停」（appendLabel 默认值改）；点击后弹窗提供两动作：**仅暂停任务**（新增）+ 输入条件追加（原有）。未运行点击仍提示"没有正在运行的任务"。
+- **暂停方式（设置卡新增 pauseMode，'force' | 'safe'）**：
+  - `force`：立即中断——`agent.cancel({kind:'user'}, {keepInbox:true})`（官方 API，agent.ts L134 确认存在；保留 inbox，恢复时可继续）
+  - `safe`：等安全边界再暂停——agent 在跑工具/推理时记 pendingPause，宿主 `ctx.on('session/event')` 监听 `tool/result`（工具完成）后落地 `agent.cancel(keepInbox)`（a4phone 已验证事件监听可行）
+- **恢复**：复用方案 B 隐形通道（plugin-source followup 注入），暂停后关闭弹窗/点确定即隐形恢复。
+- **宿主**：新增 `/dsh-task-control/pause` 路由（POST { sessionId, mode }）+ 事件监听；暂停状态可用内存 Map（不跨重启持久化，暂停即停，重启后自然结束）。
+- **验证过的官方能力**：`agent.cancel(cause, options)` 带 `keepInbox`；`agent.status` 可判 idle/running（agent.ts L100）。
+- **与急停区别**：急停=杀进程（针对卡死）；暂停=官方 cancel 优雅中断（正常场景，工具会被官方 drain）。

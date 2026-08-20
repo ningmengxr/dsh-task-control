@@ -1,6 +1,6 @@
 {
   "name": "dsh-task-control",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "DeepSeek Harness 插件：pip/GitHub 下载卡死一键急停 + 下载进度检测 + 卡死识别 + 隐形追加条件。Emergency stop for stuck downloads, download progress, stuck detection and invisible append-condition for DSH.",
   "type": "module",
   "main": "lib/index.js",

@@ -186,6 +186,76 @@ export function apply(ctx: any): (() => void) | undefined {
     },
   }))
 
+  // ── safe-wait 暂停：等待工具完成边界后落地 ─────────────────────────
+  // sessionId → { mode: 'safe' }：请求 safe 暂停时若工具在跑，先挂起，等 tool/result 再 cancel
+  const pendingPauses = new Map<string, { mode: 'safe' }>()
+  const onSessionEvent = (session: any, event: any): void => {
+    const key = String(session.id)
+    if (!pendingPauses.has(key)) return
+    if (event.type !== 'tool/result') return
+    pendingPauses.delete(key)
+    const agent = agents.get(session.id)
+    if (agent !== undefined && agent.status === 'running') {
+      agent.cancel({ kind: 'user' }, { keepInbox: true })
+    }
+  }
+  ctx.on('session/event', onSessionEvent)
+
+  // ── 暂停路由：force = 立即 cancel（keepInbox）；safe = 等工具完成边界 ──
+  disposers.push(webServer.register({
+    kind: 'exact',
+    path: '/dsh-task-control/pause',
+    handler: async (req: any, res: any) => {
+      const respond = (status: number, payload: unknown): void => {
+        res.writeHead(status, { 'content-type': 'application/json' })
+        res.end(JSON.stringify(payload))
+      }
+      try {
+        if (req.method !== 'POST') return respond(405, { ok: false, error: 'method not allowed' })
+        if (!isLoopbackHost(req.headers?.host)) return respond(403, { ok: false, error: 'forbidden' })
+        const raw = await readBody(req)
+        let parsed: any
+        try {
+          parsed = JSON.parse(raw)
+        } catch {
+          return respond(400, { ok: false, error: 'invalid json' })
+        }
+        const sessionId = typeof parsed?.sessionId === 'string' ? parsed.sessionId : ''
+        const mode = parsed?.mode === 'force' || parsed?.mode === 'safe' ? parsed.mode : 'safe'
+        if (sessionId === '') {
+          return respond(400, { ok: false, error: 'sessionId 必填' })
+        }
+        const agent = agents.get(sessionId)
+        if (agent === undefined) {
+          return respond(404, { ok: false, error: 'session not found' })
+        }
+        if (agent.status !== 'running') {
+          return respond(200, { ok: true, mode, applied: false, message: '任务未在运行，无需暂停' })
+        }
+        if (mode === 'force') {
+          // force：立即中断 turn，保留 inbox（恢复时无需重新输入）
+          agent.cancel({ kind: 'user' }, { keepInbox: true })
+          return respond(200, { ok: true, mode, applied: true, message: '已强制暂停（cancel + keepInbox）' })
+        }
+        // safe：若当前有未返回的工具调用，挂起等待 tool/result 边界；否则立即暂停
+        let openTools = 0
+        for (const ev of agent.session.events) {
+          if (ev.type === 'tool/call') openTools += 1
+          else if (ev.type === 'tool/result') openTools = Math.max(0, openTools - 1)
+        }
+        if (openTools > 0) {
+          pendingPauses.set(sessionId, { mode: 'safe' })
+          return respond(200, { ok: true, mode, applied: true, deferred: true, message: '任务暂停中：等待当前工具完成后落地' })
+        }
+        agent.cancel({ kind: 'user' }, { keepInbox: true })
+        return respond(200, { ok: true, mode, applied: true, message: '已暂停（无运行中工具，立即生效）' })
+      } catch (error) {
+        ctx.logger?.warn?.('dsh-task-control: pause 请求处理失败: %s', String(error))
+        if (!res.headersSent) respond(500, { ok: false, error: 'internal error' })
+      }
+    },
+  }))
+
   // ── 下载状态查询：区分"仍在下载"与"下载异常中断" ────────────────
   disposers.push(webServer.register({
     kind: 'exact',

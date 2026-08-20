@@ -8,7 +8,7 @@ export interface TaskControlSettings {
   emergencyLabel: string
   /** 检测按钮文案 */
   checkLabel: string
-  /** 追加条件按钮文案 */
+  /** 追加/暂停按钮文案 */
   appendLabel: string
   /** 检测·健康输出 */
   healthyText: string
@@ -22,7 +22,7 @@ export interface TaskControlSettings {
 export const SETTINGS_DEFAULTS: TaskControlSettings = {
   emergencyLabel: '急停',
   checkLabel: '拍一下deepseek',
-  appendLabel: '追加条件',
+  appendLabel: '软暂停/追加',
   healthyText: '任务正常，无异常',
   errorText: '任务出错：{error}',
   runningText: '任务正在运行中，暂未出错',
@@ -43,7 +43,7 @@ export function loadSettings(): TaskControlSettings {
     const clean: TaskControlSettings = { ...SETTINGS_DEFAULTS }
     for (const key of SETTING_KEYS) {
       const value = parsed[key]
-      if (typeof value === 'string') clean[key] = value
+      if (typeof value === 'string') clean[key] = value as never
     }
     return clean
   } catch {
