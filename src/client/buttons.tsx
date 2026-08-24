@@ -140,12 +140,19 @@ export function CheckButton({ useSession, sessionId, cancelSession }: CheckButto
     } else if (running) {
       // 下载类调用（不论是否超时）→ 查宿主状态，区分"仍在下载（显示百分比）"与"下载异常中断（可打断）"
       const downloadCall = runningCalls.find(call => isDownloadCall(call.argsRaw))
-      // 非下载类的超时调用 → 疑似卡死
-      const stuck = runningCalls.find(call => Date.now() - call.time > STUCK_THRESHOLD_MS && !isDownloadCall(call.argsRaw))
+      // pwsh 类调用（通用工具）→ 点击即查宿主活跃度/IO/进度，不再干等 10 分钟卡死阈值
+      const pwshCall = runningCalls.find(call => /pwsh/i.test(call.name) && !isDownloadCall(call.argsRaw))
+      // 非下载、非 pwsh 的超时调用 → 疑似卡死
+      const stuck = runningCalls.find(call => Date.now() - call.time > STUCK_THRESHOLD_MS && !isDownloadCall(call.argsRaw) && !/pwsh/i.test(call.name))
       if (downloadCall !== undefined) {
         void checkDownload(downloadCall.name, downloadCall.argsRaw, downloadCall.time)
         text = '正在检查下载状态…'
         marker = null
+      } else if (pwshCall !== undefined) {
+        void checkPwsh(pwshCall.name, pwshCall.argsRaw, pwshCall.time)
+        text = '正在检查 pwsh 运行状态…'
+        // pwsh 无 URL/文件特征时退化为 argsRaw 片段，保证卡住时也能匹配进程强制终止
+        marker = extractMarker(pwshCall.argsRaw) ?? pwshCall.argsRaw.replace(/['"`]/g, '').slice(0, 160)
       } else if (stuck !== undefined) {
         text = `疑似卡死：工具“${stuck.name}”已运行 ${formatDuration(Date.now() - stuck.time)} 未返回，请考虑中断任务或检查网络`
         marker = extractMarker(stuck.argsRaw)
@@ -194,6 +201,57 @@ export function CheckButton({ useSession, sessionId, cancelSession }: CheckButto
           : `下载出现异常中断：${fileName} 的下载进程已退出（文件停留在 ${formatSize(status.fileSizeBytes)}），任务可能还卡在等待返回值，可强制终止`)
       }
       setStuckMarker(marker)
+    }
+  }
+  /**
+   * pwsh 类工具：点击即查宿主（进程活跃 + IO 速率 + 输出文件 + 总量），
+   * 结果四档：能算百分比 → 百分比；有 IO/输出 → 运行速度；IO 为 0 → 疑似卡住；进程退出 → 异常中断。
+   */
+  const checkPwsh = async (toolName: string, argsRaw: string, startTime: number): Promise<void> => {
+    const marker = extractMarker(argsRaw) ?? argsRaw.replace(/['"`]/g, '').slice(0, 160)
+    const outPath = extractOutPath(argsRaw)
+    const status = await fetchPwshStatus(marker, outPath ?? '')
+    const dur = formatDuration(Date.now() - startTime)
+    if (status === null) {
+      // 宿主不可用：退回通用信息（至少显示已运行时长，不再干巴巴显示"暂未出错"）
+      setResult(`正在执行 ${toolName}（已运行 ${dur}），宿主状态查询不可用（插件宿主半未生效）`)
+      setStuckMarker(marker !== '' ? marker : null)
+      return
+    }
+    if (status.active) {
+      // ① 能算百分比（有总量）→ 显示百分比
+      if (status.totalBytes > 0 && status.fileSizeBytes >= 0) {
+        const pct = formatPercent(status.fileSizeBytes, status.totalBytes)
+        setResult(`正在执行 ${toolName}，进度 ${pct}（已运行 ${dur}）`)
+        setStuckMarker(null)
+        return
+      }
+      // ② 速度：优先瞬时 IO 速率；其次输出文件增速（与上次采样对比）
+      const now = Date.now()
+      let speedText: string | null = null
+      if (status.ioBytesPerSec > 0) {
+        speedText = `当前 IO 速率 ${formatSpeed(status.ioBytesPerSec)}`
+      } else if (
+        status.fileSizeBytes >= 0
+        && lastPwshSample !== null
+        && status.fileSizeBytes > lastPwshSample.fileSizeBytes
+      ) {
+        const dt = (now - lastPwshSample.time) / 1000
+        if (dt > 0) speedText = `输出速度 ${formatSpeed((status.fileSizeBytes - lastPwshSample.fileSizeBytes) / dt)}`
+      }
+      lastPwshSample = { time: now, fileSizeBytes: status.fileSizeBytes }
+      if (speedText !== null) {
+        setResult(`正在执行 ${toolName}（${speedText}，已运行 ${dur}），任务仍在进行`)
+        setStuckMarker(null)
+      } else {
+        // ③ 进程活着但 IO 为 0 且无输出文件 → 疑似卡住（句柄死锁等），提供强制终止
+        setResult(`pwsh 进程无任何输出活动（IO 速率 0），已运行 ${dur}，疑似卡住，可强制终止`)
+        setStuckMarker(marker !== '' ? marker : null)
+      }
+    } else {
+      // ④ 进程已退出 → 异常中断（工具错误结果不反映在 lastAgentError，这里补上）
+      setResult(`${toolName} 进程已退出（可能异常中断），任务可能还卡在等待返回值，可强制终止`)
+      setStuckMarker(marker !== '' ? marker : null)
     }
   }
   const onForceKill = async (): Promise<void> => {
@@ -538,6 +596,29 @@ async function fetchDownloadStatus(marker: string, outPath: string | null): Prom
   }
 }
 
+/** 宿主查询 pwsh 状态：active=进程存活；ioBytesPerSec=瞬时 IO 速率（0≈无活动）；fileSizeBytes=-1 未找到文件；totalBytes=-1 总量未知。 */
+interface PwshStatus {
+  active: boolean
+  procCount: number
+  ioBytesPerSec: number
+  fileSizeBytes: number
+  totalBytes: number
+}
+async function fetchPwshStatus(marker: string, outPath: string): Promise<PwshStatus | null> {
+  try {
+    const response = await fetch('/dsh-task-control/pwsh-status', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ marker, outPath }),
+    })
+    if (!response.ok) return null
+    const data = await response.json()
+    return typeof data?.active === 'boolean' ? data : null
+  } catch {
+    return null
+  }
+}
+
 /** 字节 → "x.x MB" 人类可读大小（负数视为未知）。 */
 function formatSize(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes < 0) return '未知'
@@ -552,6 +633,19 @@ function formatPercent(fileSizeBytes: number, totalBytes: number): string | null
   }
   return null
 }
+
+/** 字节/秒 → "x.x MB/s" / "x KB/s"（负数视为未知）。 */
+function formatSpeed(bytesPerSec: number): string {
+  if (!Number.isFinite(bytesPerSec) || bytesPerSec < 0) return '未知'
+  if (bytesPerSec >= 1048576) return `${(bytesPerSec / 1048576).toFixed(1)} MB/s`
+  return `${Math.round(bytesPerSec / 1024)} KB/s`
+}
+
+/**
+ * pwsh 状态两次采样的输出文件大小记录（模块级，跨点击共享），
+ * 用于在拿不到瞬时 IO 速率时计算输出文件的平均增长速度。
+ */
+let lastPwshSample: { time: number; fileSizeBytes: number } | null = null
 
 /**
  * 主操作按钮：与发送按钮同风格——info-fill 蓝色底、静态白字、胶囊圆角，
