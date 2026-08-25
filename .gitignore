@@ -1,0 +1,15 @@
+# 依赖与构建产物以外的杂项
+node_modules/
+
+# 日志与临时文件
+*.log
+.boot-test-*.log
+.inspect-*
+
+# 发行版安装包与宣传材料（只上传到发行版页，不进仓库）
+release/
+宣传/
+
+# 系统文件
+.DS_Store
+Thumbs.db
