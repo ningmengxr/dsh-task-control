@@ -1,0 +1,4 @@
+# 安装 patch：按包名解析（安装方式待定：npm 包 / junction 链接）
+- insert:
+    - id: task-control
+      name: 'dsh-task-control'
