@@ -5,7 +5,11 @@
 ---
 
 ## 2026-09-17
-- **DSH 0.1.5+ 兼容修复（"急停/检测按钮消失"）**：
+- **v0.4.4 — 设置项迁移到「通用设置」**：
+  - **设置行改注册到 `settings.general.item`**（通用设置里的「任务控制」一栏）。新版 DSH 的「插件」标签只做插件清单/开关展示（`settings.plugin.item` 是 keyed slot，按插件的 settings 命名空间 dispatch），自定义设置项的正确位置是 `settings.general.item`——官方自己的语言/外观/Enter 行为、以及 aqua 的外观行都注册在这里；迁移后 6 个文案输入框稳定显示在通用设置面板中。
+  - **移除宿主半的 settings 命名空间注册**：设置存在客户端 localStorage，不需要宿主 serve namespace。顺带去掉对已被 DSH 移除的 `@deepseek-ai/dsh-client-runtime` 的类型依赖。
+  - `dsh.client.inject` 更新：`@deepseek-ai/dsh-client-ui-settings-plugins` → `@deepseek-ai/dsh-client-ui-settings-general`。
+- **v0.4.3 — DSH 0.1.5+ 兼容修复（"急停/检测按钮消失"）**：
   - **现象**：DSH 升到 0.1.6-alpha.1 后，急停（红色）与检测按钮消失，只剩"追加条件"；刷新时按钮会"一闪而过"。
   - **根因**：DSH 0.1.5 起把 `runningCalls` / `nodes` 从 `SessionSnapshot`（`useSession`）迁到了 **`ChatSnapshot.legacy`**（`useChat`）。继续读 `useSession(s => s.runningCalls)` 会得到 `undefined`，组件内再 `.find()` 就抛 TypeError → 按钮渲染失败（"追加条件"不读这两个字段，所以幸存）。
   - **二次根因**：slot 的 standardProps 由 `useSyncExternalStoreWithSelector` **逐个绑定**，首帧常只有 `useSession`、`useChat` 稍后就绪；若在同一组件内按存在性条件调用 hook，会造成 hook 调用数量变化 → React 抛错 → 按钮"一闪而过"。

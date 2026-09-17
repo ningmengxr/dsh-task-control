@@ -2,25 +2,24 @@
  * dsh-task-control 客户端插件入口（纯 TS，无 JSX）
  *
  * 注册：
- *   - 检测按钮（conversation.input.right，"拍一下deepseek"，order 90 → 追加条件左侧）
+ *   - 急停按钮（conversation.input.right，order 80，最左）
+ *   - 检测按钮（conversation.input.right，"拍一下deepseek"，order 90）
  *   - 追加条件按钮（conversation.input.right，order 100）
- *   - 设置卡（settings.plugin.item，可自定义检测/按钮文案）
+ *   - 设置行（settings.general.item → 通用设置里的"任务控制"一栏，可自定义文案）
  *
  * 停止机制：inputActions 没有 stop，正确通道是
  *   ctx.sessions.binding(sessionId)?.session.cancel()（host RPC）。
  */
-import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
-// SlotMap 合并
 import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
-import type {} from '@deepseek-ai/dsh-client-ui-settings-plugins/client'
+import type {} from '@deepseek-ai/dsh-client-ui-settings-general/client'
 import { CheckButton, AppendButton, EmergencyButton, type AppendInjected, type CheckInjected } from './buttons.tsx'
 import { SettingsCard } from './SettingsCard.tsx'
 
 export const name = 'task-control'
 export const inject = ['slots', 'sessions']
 
-/** 客户端插件入口：注册按钮与设置卡。 */
-export function apply(ctx: ClientContext): void {
+/** 客户端插件入口：注册按钮与设置行。 */
+export function apply(ctx: any): void {
   // 急停按钮：最左（order 80），红色，一键杀进程 + 终止任务
   ctx.slots.inject('conversation.input.right', () => ctx.slots.register({
     name: 'conversation.input.right',
@@ -90,11 +89,13 @@ export function apply(ctx: ClientContext): void {
     }),
   }, AppendButton))
 
-  ctx.slots.inject('settings.plugin.item', () => ctx.slots.register({
-    name: 'settings.plugin.item',
+  // 设置行：注册进「通用设置」的条目列表（settings.general.item 是 list slot，
+  // 由 ui-settings-general 的 General 页面声明）。新版「插件」标签只展示插件清单/
+  // 开关，自定义设置项应放这里；owner 不传 props，行自己画标题与写入路径。
+  // order 12：排在官方条目（语言 1 / 外观 10 / Enter 行为等）之后，皮肤行（11）附近。
+  ctx.slots.inject('settings.general.item', () => ctx.slots.register({
+    name: 'settings.general.item',
     id: 'task-control',
-    // 新版 DSH：settings.plugin.item 是 keyed slot，key = 插件的 settings 命名空间（必须）
-    key: 'dsh-task-control',
-    order: 5,
+    order: 12,
   }, SettingsCard))
 }

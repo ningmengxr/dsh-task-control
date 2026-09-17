@@ -322,35 +322,10 @@ async function autoUpdate(logger: any): Promise<void> {
   }
 }
 
-/**
- * 注册插件的 settings 命名空间。
- * 新版 DSH 的 `settings.plugin.item` 是 keyed slot（以 settings 命名空间为键），
- * 且 host 必须 serve 该命名空间，设置卡才会被 dispatch 显示。
- * 动态 import @deepseek-ai/dsh-settings（新版 DSH 已放进 ~/.dsh/profiles/node_modules，
- * 宿主插件现在可以加载），失败仅警告，不影响核心功能。
- */
-async function registerSettingsNamespace(ctx: any): Promise<void> {
-  try {
-    const settingsMod: any = await import('@deepseek-ai/dsh-settings')
-    const schemaMod: any = await import('schemastery')
-    const ns = settingsMod.settingsNamespace('dsh-task-control')
-    settingsMod.installSettingsSection(ctx, ns, schemaMod.z.object({}), {}, {
-      setSource: () => {},
-      onChange: () => {},
-    })
-    ctx.logger?.info?.('dsh-task-control: settings 命名空间已注册（设置卡可用）')
-  } catch (error) {
-    ctx.logger?.warn?.('dsh-task-control: settings 命名空间注册失败（设置卡不显示，不影响核心功能）: %s', String(error))
-  }
-}
-
 /** 宿主插件入口：挂载 /dsh-task-control/resume 与 /dsh-task-control/kill 路由。 */
 export function apply(ctx: any): (() => void) | undefined {
   // 自动更新：异步后台检查，不阻塞插件启动
   void autoUpdate(ctx.logger)
-  // 注册插件 settings 命名空间：新版 DSH 要求 host serve 才能让设置卡显示；
-  // 动态 import + try-catch，失败只导致设置卡不显示，绝不影响核心功能。
-  void registerSettingsNamespace(ctx)
   const webServer = ctx.get('webServer')
   const agents = ctx.get('agents')
   if (webServer === undefined || agents === undefined) {
