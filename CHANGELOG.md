@@ -4,6 +4,14 @@
 
 ---
 
+## 2026-09-17
+- **DSH 0.1.5+ 兼容修复（"急停/检测按钮消失"）**：
+  - **现象**：DSH 升到 0.1.6-alpha.1 后，急停（红色）与检测按钮消失，只剩"追加条件"；刷新时按钮会"一闪而过"。
+  - **根因**：DSH 0.1.5 起把 `runningCalls` / `nodes` 从 `SessionSnapshot`（`useSession`）迁到了 **`ChatSnapshot.legacy`**（`useChat`）。继续读 `useSession(s => s.runningCalls)` 会得到 `undefined`，组件内再 `.find()` 就抛 TypeError → 按钮渲染失败（"追加条件"不读这两个字段，所以幸存）。
+  - **二次根因**：slot 的 standardProps 由 `useSyncExternalStoreWithSelector` **逐个绑定**，首帧常只有 `useSession`、`useChat` 稍后就绪；若在同一组件内按存在性条件调用 hook，会造成 hook 调用数量变化 → React 抛错 → 按钮"一闪而过"。
+  - **修复**：改为「模式探测 + `key={mode}` 重挂载」——外壳先探测 `useChat` 决定数据来源（新版 `chat` / 旧版 `session`），再用 `key={mode}` 渲染内部组件，模式切换走重新挂载而非改变 hook 数量，保证组件内 hook 调用次数恒定。旧版 DSH 自动回退 `useSession`，向后兼容。
+  - **验证**：DSH 0.1.6-alpha.1 下三个按钮（急停/检测/追加条件）显示与功能均正常（用户实测）。
+
 ## 2026-08-27
 - 🎉 **收录到 awesome-dsh-plugin（12518★）**：PR #3225 合并，正式进入 DeepSeek Harness 插件精选列表（`dsh plugin add dsh-task-control` 可装）。收录前完成了三件事：
   - 声明 `dsh.bundle` manifest → 支持 `dsh plugin add` 正规安装

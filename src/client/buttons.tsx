@@ -31,6 +31,66 @@ function useSettings(): TaskControlSettings {
   return s
 }
 
+/** 运行中的工具调用（跨 DSH 版本通用的最小字段）。 */
+interface RunningCallLike {
+  callId: string
+  name: string
+  time: number
+  argsRaw: string
+}
+
+/** 会话内容来源模式：新版走 ChatSnapshot.legacy（useChat），旧版走 SessionSnapshot 顶层（useSession）。 */
+type SnapshotMode = 'chat' | 'session'
+
+/**
+ * 探测会话内容来源模式。
+ *
+ * - **新版 DSH（0.1.5+）**：`runningCalls`/`nodes` 从 `SessionSnapshot` 迁到了
+ *   `ChatSnapshot.legacy`（slot 的 `useChat` standardProp）→ `'chat'`。
+ * - **旧版**：字段仍在 `SessionSnapshot` 顶层（`useSession`）→ `'session'`。
+ * - 都未就绪 → `null`（调用方渲染空占位，不订阅）。
+ *
+ * ⚠️ **关键**：slot 的 standardProps 由 `useSyncExternalStoreWithSelector` **逐个绑定**
+ * （`ui-renderer/src/client/bind.ts`），首帧常常只有 `useSession`、`useChat` 稍后才就绪。
+ * 若在同一个组件里"按存在与否"改变 hook 调用数量，React 会抛 hook 数量错误 → 组件崩溃
+ * → 按钮一闪而过。因此调用方必须用 `key={mode}` 渲染：模式变化 = 重新挂载（各自 hook 独立）。
+ */
+function snapshotMode(props: { useSession?: any; useChat?: any }): SnapshotMode | null {
+  if (typeof props.useChat === 'function') return 'chat'
+  if (typeof props.useSession === 'function') return 'session'
+  return null
+}
+
+/** 内容级比较：runningCalls 每次快照都是新数组引用，内容未变则不触发重渲染（nodes 忽略）。 */
+function sliceEq(
+  a: { runningCalls?: readonly RunningCallLike[] } | undefined,
+  b: { runningCalls?: readonly RunningCallLike[] } | undefined,
+): boolean {
+  const x = a?.runningCalls ?? []
+  const y = b?.runningCalls ?? []
+  return x.length === y.length && x.every((v, i) => v === y[i])
+}
+
+/**
+ * 按模式读取会话内容切片（`runningCalls` / `nodes`）。
+ * 模式在组件挂载期间固定（由调用方的 `key={mode}` 保证），因此每次渲染只调用同一个
+ * hook，调用数量恒定 —— 这是不崩的关键。
+ */
+function useSnapshotSlice(
+  mode: SnapshotMode,
+  props: { useSession?: any; useChat?: any },
+): { runningCalls: readonly RunningCallLike[]; nodes: readonly any[] } {
+  const chat = mode === 'chat' ? props.useChat((s: any) => s?.legacy, sliceEq) : undefined
+  const session = mode === 'session'
+    ? props.useSession((s: any) => ({ runningCalls: s?.runningCalls, nodes: s?.nodes }), sliceEq)
+    : undefined
+  const slice = chat ?? session
+  return {
+    runningCalls: (slice?.runningCalls ?? []) as readonly RunningCallLike[],
+    nodes: (slice?.nodes ?? []) as readonly any[],
+  }
+}
+
 /** 共享弹窗外壳：全屏遮罩 + 居中圆角卡片（主题 token 自适应深/浅色）。 */
 interface ModalShellProps {
   onClose: () => void
@@ -117,15 +177,24 @@ export interface CheckInjected {
  * 疑似卡死时提供"强制终止"：按命令特征杀进程（session.cancel 会被排在工具返回值后面，杀进程才能立即恢复）。
  */
 type CheckButtonProps = PropsRuntime<'conversation.input.right'> & CheckInjected
-export function CheckButton({ useSession, sessionId, cancelSession }: CheckButtonProps) {
+
+/**
+ * 检测按钮外壳：等 slot 的 standardProps 就绪后再挂载内部组件。
+ * `key={mode}` 让"旧版字段 → 新版字段"的切换走**重新挂载**，而不是在同一个组件里
+ * 改变 hook 调用数量（后者会触发 React 的 hook 数量错误 → 按钮一闪而过）。
+ */
+export function CheckButton(props: CheckButtonProps) {
+  const mode = snapshotMode(props)
+  if (mode === null) return null
+  return <CheckButtonCore key={mode} mode={mode} {...props} />
+}
+
+function CheckButtonCore({ mode, ...props }: CheckButtonProps & { mode: SnapshotMode }) {
+  const { useSession, sessionId, cancelSession } = props
   const s = useSettings()
   const running = useSession(s => s.running)
   const lastError = useSession(s => s.lastAgentError)
-  const runningCalls = useSession(
-    s => s.runningCalls,
-    // 内容级比较：避免每次快照（新数组引用）都触发重渲染
-    (a, b) => a.length === b.length && a.every((x, i) => x === b[i]),
-  )
+  const { runningCalls } = useSnapshotSlice(mode, props)
   const [open, setOpen] = useState(false)
   const [result, setResult] = useState('')
   const [stuckMarker, setStuckMarker] = useState<string | null>(null)
@@ -402,17 +471,21 @@ function EmergencyResultModal({ phase, result, interrupted, onClose, onDecide }:
  * 被中断工具结果未知时弹出恢复决策点（验证外部状态 / 重跑 / 跳过），隐形注入恢复。
  */
 type EmergencyButtonProps = PropsRuntime<'conversation.input.right'> & AppendInjected
-export function EmergencyButton({ useSession, cancelSession, resumeTask }: EmergencyButtonProps) {
+
+/** 急停按钮外壳：等 standardProps 就绪；`key={mode}` 让模式切换走重新挂载（避免 hook 数量变化崩溃）。 */
+export function EmergencyButton(props: EmergencyButtonProps) {
+  const mode = snapshotMode(props)
+  if (mode === null) return null
+  return <EmergencyButtonCore key={mode} mode={mode} {...props} />
+}
+
+function EmergencyButtonCore({ mode, ...props }: EmergencyButtonProps & { mode: SnapshotMode }) {
+  const { cancelSession, resumeTask, useSession } = props
   const s = useSettings()
   const running = useSession(snapshot => snapshot.running)
-  const runningCalls = useSession(
-    snapshot => snapshot.runningCalls,
-    // 内容级比较：runningCalls 每次快照都是新数组引用，但内容未变时不触发重渲染
-    (a, b) => a.length === b.length && a.every((x, i) => x === b[i]),
-  )
-  // nodes 是大数组且每次快照都是新引用：eq 恒 true 避免每次快照都触发重渲染（卡顿元凶），
-  // 组件因 running 变化重渲染时仍会重新求值拿到最新 nodes（useSyncExternalStoreWithSelector 语义）
-  const nodes = useSession(snapshot => snapshot.nodes, () => true)
+  // runningCalls / nodes：新版在 ChatSnapshot.legacy（useChat），旧版在 SessionSnapshot（useSession）；
+  // 模式由外壳用 key 固定，组件内 hook 调用数量恒定。
+  const { runningCalls, nodes } = useSnapshotSlice(mode, props)
   const [confirmOpen, setConfirmOpen] = useState(false)
   const [open, setOpen] = useState(false)
   const [phase, setPhase] = useState<'stopping' | 'done' | 'decision'>('done')
